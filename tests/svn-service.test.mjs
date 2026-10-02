@@ -211,6 +211,87 @@ test('add 前置校验：目标不存在时明确报错，且不在磁盘上留�
     }
   });
 
+test('提交未受控的选中项：只对勾选项自动 add（现场卡点回归）',
+  { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
+    // 事故背景：用户勾选一个"未纳入版本控制"的文件直接点提交，svn 回
+    // `E200009: … 尚未纳入版本控制`，对用户是死路。现在：**勾选的**未受控项会自动先 add。
+    // 结构刻意复刻现场：中文目录先受控，其中的新文件才是未受控（svn 不递归未受控目录，
+    // 目录本身未受控时其中的文件根本不会出现在 status 里）。
+    const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-auto-add-'));
+    try {
+      const repo = path.join(root, 'repo');
+      const wc = path.join(root, 'wc');
+      run(svnadminPath(), ['create', repo], root);
+      run(svnBin, ['checkout', pathToFileURL(repo).href, wc], root);
+
+      mkdirSync(path.join(wc, '示例目录'), { recursive: true });
+      writeFileSync(path.join(wc, '示例目录', '修改说明.txt'), 'v1');
+      run(svnBin, ['add', '示例目录'], wc);
+      run(svnBin, ['commit', '-m', 'init'], wc);
+
+      // 现在目录已受控，往里面放一个未受控文件 —— 与用户现场完全一致
+      writeFileSync(path.join(wc, '示例目录', '固件.bin'), 'BIN');
+      const rel = '示例目录/固件.bin';
+      const svc = createSvnService({ logger: { warn: () => {} } });
+      assert.equal((await svc.status(wc)).entries.find((e) => e.path === rel)?.item, 'unversioned');
+
+      // 直接提交（不先调 add）
+      const committed = await svc.commit(wc, { message: '直接提交未受控文件', paths: [rel] });
+      assert.equal(typeof committed.revision, 'number');
+      assert.ok(committed.revision >= 2, `提交版本号异常：${committed.revision}`);
+      assert.deepEqual(committed.autoAdded, [rel], `应只自动 add 勾选项：${JSON.stringify(committed)}`);
+      // 父目录已受控 → 无需提升
+      assert.deepEqual(committed.committedPaths, [rel]);
+      assert.deepEqual(committed.promoted, []);
+
+      // 仓库侧确认已进库，且中文路径与中文提交说明都正常
+      const lg = await svc.log(wc, { limit: 1 });
+      assert.equal(lg.entries[0].message, '直接提交未受控文件');
+      assert.deepEqual(lg.entries[0].paths.map((p) => p.path), ['/示例目录/固件.bin']);
+      assert.deepEqual((await svc.status(wc)).entries, []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+test('提交全部改动：必须排除未受控文件（不自动 add）',
+  { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
+    // 需求（用户 2026-10-03 明确）：`paths: []`（= 面板的"提交全部改动"）
+    // 只提交**已纳入版本控制**的改动，未受控文件一律排除、绝不自动 add；
+    // 只有用户显式勾选的条目才自动 add。
+    const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-commit-all-'));
+    try {
+      const repo = path.join(root, 'repo');
+      const wc = path.join(root, 'wc');
+      run(svnadminPath(), ['create', repo], root);
+      run(svnBin, ['checkout', pathToFileURL(repo).href, wc], root);
+      writeFileSync(path.join(wc, '受控.txt'), 'v1');
+      run(svnBin, ['add', '受控.txt'], wc);
+      run(svnBin, ['commit', '-m', 'init'], wc);
+
+      // 一个已受控文件的修改 + 一个未受控文件 + 一个未受控目录
+      writeFileSync(path.join(wc, '受控.txt'), 'v2');
+      writeFileSync(path.join(wc, '未受控.bin'), 'BIN');
+      mkdirSync(path.join(wc, '新目录'), { recursive: true });
+      writeFileSync(path.join(wc, '新目录', 'x.bin'), 'BIN');
+
+      const svc = createSvnService({ logger: { warn: () => {} } });
+      const committed = await svc.commit(wc, { message: '只提交受控改动', paths: [] });
+      assert.ok(committed.revision >= 2);
+      assert.deepEqual(committed.autoAdded, [], '提交全部不得触发任何自动 add');
+
+      // 仓库里只有受控文件的改动；未受控的两项原样保留在本地
+      const lg = await svc.log(wc, { limit: 1 });
+      assert.deepEqual(lg.entries[0].paths.map((p) => p.path), ['/受控.txt']);
+      const after = (await svc.status(wc)).entries.map((e) => [e.path, e.item]).sort();
+      // 与 after 用同一个比较器排序，避免依赖中文的代码点顺序
+      const expected = [['未受控.bin', 'unversioned'], ['新目录', 'unversioned']].sort();
+      assert.deepEqual(after, expected);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 test('端到端：一级子目录工作副本扫描', { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-scan-'));
   try {
