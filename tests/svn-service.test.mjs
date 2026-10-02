@@ -17,7 +17,7 @@ import {
   createSvnService, SvnCommandError,
   E_AUTH, E_NOT_WC, E_BAD_REQUEST, E_FORBIDDEN,
 } from '../lib/svn-service.js';
-import { resolveSvnBinary } from '../lib/svn-runner.js';
+import { resolveSvnBinary, utf8LocaleOverride } from '../lib/svn-runner.js';
 
 // ── 纯函数 ────────────────────────────────────────────────────────────────
 
@@ -106,7 +106,9 @@ function svnadminPath() {
 }
 
 function run(bin, args, cwd) {
-  return execFileSync(bin, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  // 与插件一致：测试自身调 svn 时也必须补 UTF-8 字符集，否则中文路径同样会乱码。
+  const env = { ...process.env, ...utf8LocaleOverride(process.env) };
+  return execFileSync(bin, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 test('端到端：探测/日志/状态/添加/提交/拉取（本地仓库）', { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
@@ -197,3 +199,90 @@ test('端到端：一级子目录工作副本扫描', { skip: svnBin === null ||
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── 中文路径（locale 回归）──────────────────────────────────────────────
+// 事故背景：宿主进程没有 LANG/LC_ALL（C locale）时，svn 会把 argv 里的 UTF-8
+// 中文路径按当前字符集二次转换 —— `示例目录` 变成 一串乱码，
+// 于是 add/commit 直接报 E155010 找不到节点。lib/svn-runner.js 现在给子进程补
+// UTF-8 的 LC_CTYPE。这两个用例就是那次事故的回归测试。
+
+test('utf8LocaleOverride：补齐 UTF-8 字符集，且不覆盖用户已有的 UTF-8 设置', () => {
+  if (process.platform === 'win32') {
+    assert.deepEqual(utf8LocaleOverride({}), {}); // Windows 走 UTF-16 argv
+    return;
+  }
+  const override = utf8LocaleOverride({});
+  // LC_ALL 会压过 LC_CTYPE，必须置空才能让 LC_CTYPE 生效
+  assert.equal(override.LC_ALL, '');
+  assert.match(override.LC_CTYPE, /utf-?8/i);
+  // 用户已显式配 UTF-8 → 尊重之，不覆盖（否则会改掉消息语言）
+  assert.deepEqual(utf8LocaleOverride({ LC_ALL: 'zh_CN.UTF-8' }), {});
+  assert.deepEqual(utf8LocaleOverride({ LC_CTYPE: 'en_US.UTF-8' }), {});
+  // 非 UTF-8 的 LC_ALL 必须被解除
+  assert.equal(utf8LocaleOverride({ LC_ALL: 'C' }).LC_ALL, '');
+  assert.equal(utf8LocaleOverride({ LANG: 'C', LC_ALL: 'C' }).LC_CTYPE.includes('UTF-8'), true);
+});
+
+test('端到端：中文目录/文件名可 add + commit（locale 回归）',
+  { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-cjk-'));
+    try {
+      const repo = path.join(root, 'repo');
+      const wc = path.join(root, 'wc');
+      run(svnadminPath(), ['create', repo], root);
+      run(svnBin, ['checkout', pathToFileURL(repo).href, wc], root);
+
+      // 首次提交一个中文文件，让工作副本有真实历史
+      writeFileSync(path.join(wc, '说明.txt'), 'v1');
+      run(svnBin, ['add', '说明.txt'], wc);
+      run(svnBin, ['commit', '-m', 'init'], wc);
+
+      // 新增中文目录 + 中文文件，模拟用户现场
+      mkdirSync(path.join(wc, '示例目录'), { recursive: true });
+      writeFileSync(path.join(wc, '示例目录', '修改说明.txt'), 'v1');
+      writeFileSync(path.join(wc, '示例目录', '固件_v000018.bin'), 'BIN');
+
+      const svc = createSvnService({ logger: { warn: () => {} } });
+      const rel = '示例目录/修改说明.txt';
+
+      // status 必须原样给出中文路径（不能被转码）。
+      // 注意 svn 的行为：**未受控目录不会递归**，此时只报目录本身，不报里面的文件。
+      const st = await svc.status(wc);
+      assert.ok(st.entries.some((e) => e.path === '示例目录' && e.item === 'unversioned'),
+        `status 应报出未受控的中文目录：${JSON.stringify(st.entries)}`);
+      assert.ok(!st.entries.some((e) => e.path === rel),
+        '未受控目录下的文件不应单独出现在 status 里（svn 不递归）');
+
+      // add --parents 连带父目录 → 目录与文件都变成 added
+      const added = await svc.add(wc, { paths: [rel] });
+      assert.ok(added.added.includes(rel), `add 应成功：${JSON.stringify(added)}`);
+      const afterAdd = await svc.status(wc);
+      assert.ok(afterAdd.entries.some((e) => e.path === '示例目录' && e.item === 'added'),
+        `add 后目录应为 added：${JSON.stringify(afterAdd.entries)}`);
+
+      // 只选"新增目录下的文件"提交：svn 要求把新增目录一并放进 pathspec，
+      // 服务层必须自动提升，否则报 E200009。
+      const committed = await svc.commit(wc, { message: '中文提交说明', paths: [rel] });
+      assert.equal(typeof committed.revision, 'number');
+      assert.ok(committed.revision >= 2, `提交版本号异常：${committed.revision}`);
+      assert.deepEqual(committed.committedPaths, ['示例目录']);
+      assert.equal(committed.promoted.length, 1);
+      assert.equal(committed.promoted[0].from, rel);
+      assert.equal(committed.promoted[0].to, '示例目录');
+
+      // 从仓库侧回读：中文路径必须原样存在（用 --xml 避开终端编码）
+      const lg = await svc.log(wc, { limit: 1 });
+      const paths = lg.entries[0].paths.map((p) => p.path);
+      assert.deepEqual(paths, ['/示例目录', '/示例目录/修改说明.txt']);
+      assert.equal(lg.entries[0].message, '中文提交说明');
+
+      // 提交说明里的中文也不能乱码（经临时文件 + --encoding UTF-8 传递）。
+      // 提交后目录里只剩那个**没被 add 过**的 .bin 仍未受控 —— 说明"提升为整目录提交"
+      // 只提交了已受控内容，不会把未 add 的文件也带上去。
+      const after = await svc.status(wc);
+      assert.deepEqual(after.entries.map((e) => [e.path, e.item]),
+        [['示例目录/固件_v000018.bin', 'unversioned']]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
