@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -179,6 +179,37 @@ test('端到端：探测/日志/状态/添加/提交/拉取（本地仓库）', 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('add 前置校验：目标不存在时明确报错，且不在磁盘上留下垃圾目录',
+  { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
+    // 事故背景（2026-10-03）：`svn add --parents` 会创建并添加缺失的中间目录。
+    // 当路径在传递过程中被转码（当年是 locale 问题）时，svn 会在磁盘上造出一个
+    // 同名的空目录并排入添加队列；用户再点"提交全部"就会把它提交进版本库。
+    // 现在 add 会先校验目标在磁盘上真实存在。
+    const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-guard-'));
+    try {
+      const repo = path.join(root, 'repo');
+      const wc = path.join(root, 'wc');
+      run(svnadminPath(), ['create', repo], root);
+      run(svnBin, ['checkout', pathToFileURL(repo).href, wc], root);
+      const svc = createSvnService({ logger: { warn: () => {} } });
+
+      const before = readdirSync(wc).sort();
+      await assert.rejects(
+        () => svc.add(wc, { paths: ['并不存在的目录/文件.bin'] }),
+        (e) => e.code === E_BAD_REQUEST && /不存在/.test(e.message),
+      );
+      assert.deepEqual(readdirSync(wc).sort(), before, '失败的 add 不得在磁盘上留下任何新条目');
+
+      // 真实存在的路径仍然可以正常添加
+      mkdirSync(path.join(wc, '真实目录'), { recursive: true });
+      writeFileSync(path.join(wc, '真实目录', 'a.bin'), 'x');
+      const ok = await svc.add(wc, { paths: ['真实目录/a.bin'] });
+      assert.ok(ok.added.includes('真实目录/a.bin'), JSON.stringify(ok));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
 test('端到端：一级子目录工作副本扫描', { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-scan-'));
