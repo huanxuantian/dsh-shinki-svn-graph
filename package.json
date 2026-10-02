@@ -1,6 +1,6 @@
 {
   "name": "dsh-shinki-svn-graph",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DSH 侧边栏 SVN 插件：探测当前工作区与其一级子目录中的 Subversion 工作副本，读取提交日志（默认最近 20 条）与本地改动，支持拉取(svn update)/添加(svn add)/提交(svn commit)。认证采用「系统凭据优先、交互式输入兜底」：默认复用 svn 自己的凭据链（macOS 上即钥匙串），不可用时才在面板里输入账号密码（密码经 stdin 传递，不进命令行）。",
   "type": "module",
   "main": "lib/index.js",

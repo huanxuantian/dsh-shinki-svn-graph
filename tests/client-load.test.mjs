@@ -124,40 +124,96 @@ test('面板组件可渲染（loading 初始态）', async () => {
   assert.equal(tree.props.className, 'ssg-root');
 });
 
+/**
+ * SvnTab 里 useState/useRef 的**声明顺序**。测试靠索引播种 hooks，所以顺序一变
+ * 播种就会错位——过去因此静默失效过（新增 state 后断言仍"通过"）。这里显式列出
+ * 顺序，并在渲染后断言消费数量一致，任何增删都会立刻炸出来。
+ */
+const HOOK_ORDER = [
+  'phase', 'repos', 'repoPath', 'repoInfo', 'rootInfo',
+  'logEntries', 'statusEntries', 'selected', 'expanded', 'message', 'allowEmpty',
+  'busy', 'note', 'output', 'limit', 'authState', 'authOpen', 'authForced',
+  'username', 'password', 'saveCreds', 'trustCert', 'tick',
+  'aliveRef', // useRef(aliveRef)，声明在 tick 之后
+];
+
+/** 用名字播种，避免直接摆弄索引。 */
+function seedHooks(state, values) {
+  const hooks = [];
+  for (const [name, value] of Object.entries(values)) {
+    const index = HOOK_ORDER.indexOf(name);
+    assert.notEqual(index, -1, `未知的状态名 ${name}（需同步 HOOK_ORDER）`);
+    hooks[index] = value;
+  }
+  state.hooks = hooks;
+}
+
 test('面板组件可渲染（ready 态：仓库选择 + 改动 + 日志）', async () => {
   const { exports, state } = await loadClient();
-  // 按 useState 调用顺序预置初值：0 phase, 1 repos, 2 repoPath, 3 repoInfo,
-  // 4 logEntries, 5 statusEntries, ... 13 limit, 14 authState
-  const hooks = [];
-  hooks[0] = 'ready';
-  hooks[1] = [{ name: 'PROJ-A', path: 'PROJ-A', url: 'http://svn.example.com/repo/group/sub/PROJ-A', revision: 2803 }];
-  hooks[2] = '';
-  hooks[3] = { isWc: true, wcRoot: '/work/PROJ-A', url: 'http://svn.example.com/repo/group/sub/PROJ-A', revision: 2803 };
-  hooks[4] = [{ revision: 2803, author: 'alice', date: '2026-10-02T15:41:29Z', message: '更新固件', paths: [{ action: 'A', path: '/x/y.bin' }] }];
-  hooks[5] = [{ path: 'proja/new.bin', item: 'unversioned', props: 'none', revision: -1, copied: false, treeConflicted: false, movedFrom: '' }];
-  hooks[6] = new Set(['proja/new.bin']);
-  hooks[7] = new Set([2803]);
-  hooks[8] = '提交说明';
-  hooks[9] = '';
-  hooks[10] = { kind: 'ok', text: '完成' };
-  hooks[11] = 'svn 输出';
-  hooks[12] = 20;
-  hooks[13] = { available: true, detail: '系统凭据可用', url: 'http://svn.example.com/repo' };
-  hooks[14] = false;
-  hooks[15] = false;
-  hooks[16] = '';
-  hooks[17] = '';
-  hooks[18] = false;
-  hooks[19] = false;
-  hooks[20] = 0;
-  state.hooks = hooks;
+  seedHooks(state, {
+    phase: 'ready',
+    repos: [{ name: 'PROJ-A', path: 'PROJ-A', url: 'http://svn.example.com/repo/group/sub/PROJ-A', revision: 2803 }],
+    repoPath: '',
+    repoInfo: { isWc: true, wcRoot: '/work/PROJ-A', url: 'http://svn.example.com/repo/group/sub/PROJ-A', revision: 2803 },
+    rootInfo: { isWc: false },
+    logEntries: [{ revision: 2803, author: 'alice', date: '2026-10-02T15:41:29Z', message: '更新固件', paths: [{ action: 'A', path: '/x/y.bin' }] }],
+    statusEntries: [{ path: 'proja/new.bin', item: 'unversioned', props: 'none', revision: -1, copied: false, treeConflicted: false, movedFrom: '' }],
+    selected: new Set(['proja/new.bin']),
+    expanded: new Set([2803]),
+    message: '提交说明',
+    allowEmpty: false,
+    note: { kind: 'ok', text: '完成' },
+    output: 'svn 输出',
+    limit: 20,
+    authState: { available: true, detail: '系统凭据可用', url: 'http://svn.example.com/repo' },
+  });
   const tree = exports.__internals.SvnTab({ scope: { sessionId: 'acme' } });
   assert.equal(tree.type, 'div');
-  // 渲染产物里应出现关键文案（默认 20 条的日志、认证徽标、未纳入版本控制的条目）
+  assert.equal(state.index, HOOK_ORDER.length, 'hook 顺序/数量与 HOOK_ORDER 不一致（组件加了 state？）');
   const text = JSON.stringify(tree, (k, v) => (k === 'onChange' || k === 'onClick' || k === 'onKeyDown' ? undefined : v));
   assert.match(text, /SVN|本地改动/);
   assert.match(text, /proja\/new\.bin/);
   assert.match(text, /2803/);
+  // 未进入子目录 → 不应出现"返回"入口
+  assert.doesNotMatch(text, /返回/);
+});
+
+test('进入子目录后出现"返回"入口，且根选项不再借用子目录的 URL', async () => {
+  const { exports, state } = await loadClient();
+  const subUrl = 'http://svn.example.com/repo/ble';
+  seedHooks(state, {
+    phase: 'ready',
+    repos: [{ name: 'ble', path: 'ble', url: subUrl, revision: 2803 }],
+    repoPath: 'ble',                                    // ← 已进入子目录
+    repoInfo: { isWc: true, wcRoot: '/work/ble', url: subUrl, revision: 2803 },
+    rootInfo: { isWc: false },                          // 工作区根不是工作副本
+    logEntries: [],
+    statusEntries: [],
+  });
+  const tree = exports.__internals.SvnTab({ scope: { sessionId: 'acme' } });
+  const text = JSON.stringify(tree, (k, v) => (k === 'onChange' || k === 'onClick' || k === 'onKeyDown' ? undefined : v));
+  // 根不是工作副本 → 返回按钮文案是"返回子目录列表"
+  assert.match(text, /返回子目录列表/);
+  // 根选项标签不得出现子目录的 URL（历史 bug：根选项借用了当前 wc.url）
+  const options = JSON.stringify(tree).match(/"工作区根目录[^"]*"/g) ?? [];
+  assert.ok(options.length > 0, '应有根选项');
+  for (const o of options) assert.ok(!o.includes(subUrl), `根选项不应带子目录 URL：${o}`);
+});
+
+test('工作区根本身是工作副本时，返回文案为"返回工作区根目录"', async () => {
+  const { exports, state } = await loadClient();
+  seedHooks(state, {
+    phase: 'ready',
+    repos: [{ name: 'ble', path: 'ble', url: 'http://svn.example.com/repo/ble', revision: 2803 }],
+    repoPath: 'ble',
+    repoInfo: { isWc: true, wcRoot: '/work/ble', url: 'http://svn.example.com/repo/ble', revision: 2803 },
+    rootInfo: { isWc: true, wcRoot: '/work', url: 'http://svn.example.com/repo', revision: 2800 },
+    logEntries: [],
+    statusEntries: [],
+  });
+  const tree = exports.__internals.SvnTab({ scope: { sessionId: 'acme' } });
+  const text = JSON.stringify(tree, (k, v) => (k === 'onChange' || k === 'onClick' || k === 'onKeyDown' ? undefined : v));
+  assert.match(text, /返回工作区根目录/);
 });
 
 test('内部工具：itemMeta / formatDate / isUnversioned', async () => {
