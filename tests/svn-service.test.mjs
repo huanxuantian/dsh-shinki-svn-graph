@@ -292,6 +292,44 @@ test('提交全部改动：必须排除未受控文件（不自动 add）',
     }
   });
 
+test('空提交说明：默认拦截，勾选 allowEmptyMessage 后放行',
+  { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-empty-msg-'));
+    try {
+      const repo = path.join(root, 'repo');
+      const wc = path.join(root, 'wc');
+      run(svnadminPath(), ['create', repo], root);
+      run(svnBin, ['checkout', pathToFileURL(repo).href, wc], root);
+      const svc = createSvnService({ logger: { warn: () => {} } });
+
+      // 默认：空说明（含纯空白）必须被拦下
+      await assert.rejects(() => svc.commit(wc, { message: '   ' }), (e) => e.code === E_BAD_REQUEST);
+      await assert.rejects(() => svc.commit(wc, { message: '' }), (e) => e.code === E_BAD_REQUEST);
+
+      // 勾选后：空说明可以提交（svn 允许空说明，不需要 --force-log）
+      writeFileSync(path.join(wc, '空白说明.txt'), 'v1');
+      const committed = await svc.commit(wc, {
+        message: '', allowEmptyMessage: true, paths: ['空白说明.txt'],
+      });
+      assert.equal(typeof committed.revision, 'number');
+      assert.ok(committed.revision >= 1);
+
+      // 仓库侧的提交说明确实是空串
+      const lg = await svc.log(wc, { limit: 1 });
+      assert.equal(lg.entries[0].message, '');
+      assert.deepEqual(lg.entries[0].paths.map((p) => p.path), ['/空白说明.txt']);
+
+      // 纯空白也放行（写进版本库的是原样的空白串）——只验证不再报错
+      writeFileSync(path.join(wc, '空白说明2.txt'), 'v2');
+      const c2 = await svc.commit(wc, {
+        message: '   ', allowEmptyMessage: true, paths: ['空白说明2.txt'],
+      });
+      assert.ok(c2.revision > committed.revision);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 test('端到端：一级子目录工作副本扫描', { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-scan-'));
   try {
