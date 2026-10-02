@@ -1,0 +1,9 @@
+# dsh-shinki-svn-graph bundle patch：把双面插件插进 web profile 的 roster。
+# 作为 profile bundle 层生效（由 package.json 的 dsh.bundle.patch 指向）。
+#
+# node 半边（exports "."）跑在宿主进程里：SVN 服务 + /shinki-svn/* HTTP 路由；
+# package.json 的 dsh.client 声明让浏览器半边（exports "./client"，由
+# /plugins/dsh-shinki-svn-graph/client.js 提供）在 web GUI 中加载。
+- insert:
+    - id: dsh-shinki-svn-graph
+      name: 'dsh-shinki-svn-graph'
