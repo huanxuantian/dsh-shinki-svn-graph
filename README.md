@@ -86,24 +86,21 @@ dsh-shinki-svn-graph/
 
 ## 安装与生效
 
-1. **部署**：把本目录放到 profile 可引用的位置。本机约定：
-   - 生效副本：`$PLUGIN_DIR`
-   - 源码仓库：`$PLUGIN_DIR`
+1. **部署**：把本目录放到 profile 可引用的位置（下文记作 `$PLUGIN_DIR`，实际路径随环境而定）。
 
-2. **登记进 profile**（`shinki-desktop`）：
+2. **登记进 profile**（示例 profile 名 `shinki-desktop`）：
 
    ```sh
-   bash dsh plugin \
-     --profile shinki-desktop add file:$PLUGIN_DIR
+   dsh plugin --profile shinki-desktop add "file:$PLUGIN_DIR"
    ```
 
    该命令会跑 pnpm 并把包名追加进 profile 的 `dsh.profile.bundles`。
-   本地反复迭代时也可以用 `link:<源码目录>`：pnpm 建符号链接，源码即被服务，改完刷新即可。
+   本地反复迭代时也可以用 `link:$PLUGIN_DIR`：pnpm 建符号链接，源码即被服务，改完刷新即可。
 
 3. **重启 dsh web**（bundle 成员变更是启动边界）：
 
    ```sh
-   bash dsh --profile shinki-desktop --port 30820 --no-open
+   dsh --profile shinki-desktop --port 30820 --no-open
    ```
 
 4. **验证**：页面里出现 `dsh-shinki-svn-graph` 的 boot 行，且
@@ -129,7 +126,7 @@ dsh-shinki-svn-graph/
 
 ```sh
 export PATH=/opt/homebrew/bin:$PATH
-node --test          # 41 项：XML 解析、路径校验、认证装配、错误归类、
+node --test          # 49 项：XML 解析、路径校验、认证装配、错误归类、
                      #          路由边界，以及一个真实本地 file:// 仓库的端到端用例
 ```
 
@@ -139,8 +136,8 @@ node --test          # 41 项：XML 解析、路径校验、认证装配、错�
 
 - **locale 必须是 UTF-8**，否则中文路径必挂：宿主进程常常没有 `LANG`/`LC_ALL`
   （→ C locale），svn 会把 argv 里的 UTF-8 路径按当前字符集**二次转换** ——
-  `示例目录` 变成 一串乱码（各字的 UTF-8 尾字节还在、
-  前导字节被吞），`svn add/commit` 直接报 `E155010 找不到节点`。
+  实测一个中文目录名会变成一串乱码（各字的 UTF-8 尾字节还在、前导字节被吞），
+  `svn add/commit` 直接报 `E155010 找不到节点`。
   `lib/svn-runner.js` 的 `utf8LocaleOverride()` 给子进程补 `LC_CTYPE=*.UTF-8`，
   并把 `LC_ALL` 置空以解除它对 LC_CTYPE 的压制 —— 只改字符集，**不改消息语言**。
 - `svn log <工作副本>` 默认按该路径的 `BASE:1` 取，而工作副本**根目录节点**的版本

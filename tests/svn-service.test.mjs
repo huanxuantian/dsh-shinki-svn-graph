@@ -215,7 +215,7 @@ test('提交未受控的选中项：只对勾选项自动 add（现场卡点回�
   { skip: svnBin === null || !existsSync(svnadminPath() ?? '') }, async () => {
     // 事故背景：用户勾选一个"未纳入版本控制"的文件直接点提交，svn 回
     // `E200009: … 尚未纳入版本控制`，对用户是死路。现在：**勾选的**未受控项会自动先 add。
-    // 结构刻意复刻现场：中文目录先受控，其中的新文件才是未受控（svn 不递归未受控目录，
+    // 结构复刻真实工作副本：中文目录先受控，其中的新文件才是未受控（svn 不递归未受控目录，
     // 目录本身未受控时其中的文件根本不会出现在 status 里）。
     const root = mkdtempSync(path.join(tmpdir(), 'dsh-svn-auto-add-'));
     try {
@@ -229,7 +229,7 @@ test('提交未受控的选中项：只对勾选项自动 add（现场卡点回�
       run(svnBin, ['add', '示例目录'], wc);
       run(svnBin, ['commit', '-m', 'init'], wc);
 
-      // 现在目录已受控，往里面放一个未受控文件 —— 与用户现场完全一致
+      // 现在目录已受控，往里面放一个未受控文件 —— 这正是真实工作副本的常见形态
       writeFileSync(path.join(wc, '示例目录', '固件.bin'), 'BIN');
       const rel = '示例目录/固件.bin';
       const svc = createSvnService({ logger: { warn: () => {} } });
@@ -352,8 +352,8 @@ test('端到端：一级子目录工作副本扫描', { skip: svnBin === null ||
 
 // ── 中文路径（locale 回归）──────────────────────────────────────────────
 // 事故背景：宿主进程没有 LANG/LC_ALL（C locale）时，svn 会把 argv 里的 UTF-8
-// 中文路径按当前字符集二次转换 —— `示例目录` 变成 一串乱码，
-// 于是 add/commit 直接报 E155010 找不到节点。lib/svn-runner.js 现在给子进程补
+// 中文路径按当前字符集二次转换 —— 实测会变成一串乱码（各字的 UTF-8 尾字节还在、
+// 前导字节被吞），于是 add/commit 直接报 E155010 找不到节点。lib/svn-runner.js 现在给子进程补
 // UTF-8 的 LC_CTYPE。这两个用例就是那次事故的回归测试。
 
 test('utf8LocaleOverride：补齐 UTF-8 字符集，且不覆盖用户已有的 UTF-8 设置', () => {
@@ -387,7 +387,7 @@ test('端到端：中文目录/文件名可 add + commit（locale 回归）',
       run(svnBin, ['add', '说明.txt'], wc);
       run(svnBin, ['commit', '-m', 'init'], wc);
 
-      // 新增中文目录 + 中文文件，模拟用户现场
+      // 新增中文目录 + 中文文件，模拟真实工作副本
       mkdirSync(path.join(wc, '示例目录'), { recursive: true });
       writeFileSync(path.join(wc, '示例目录', '修改说明.txt'), 'v1');
       writeFileSync(path.join(wc, '示例目录', '固件_v000018.bin'), 'BIN');
