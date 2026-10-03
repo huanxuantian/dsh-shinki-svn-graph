@@ -66,6 +66,7 @@ async function call(handler, body, options) {
 
 test('非回环客户端且不在信任名单 → 403', async () => {
   const handler = createHandler(makeCtx(tmpdir()));
+  // 192.0.2.0/24 是 RFC 5737 保留的文档示例网段 —— 用非回环地址触发栅栏，不涉及任何真实内网
   const { res, json } = await call(handler, { method: 'init', sessionId: 'acme' }, { remote: '192.0.2.9' });
   assert.equal(res.statusCode, 403);
   assert.equal(json.ok, false);
