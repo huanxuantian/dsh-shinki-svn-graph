@@ -165,3 +165,10 @@ package.json），改版本时两处都要改。
 ## 许可
 
 Apache-2.0
+
+## 相关路线图（依赖提示）
+
+本插件与第三方 `dsh-better-sidebar` 有**服务依赖**（激活时 `inject` 该服务，缺失会 `pending`）。
+社区计划由 **`dsh-shinki-sidebar-tools`** 逐步**接替 `dsh-better-sidebar` 的部分能力**
+（背景：第三方版本兼容风险 + 官方右侧边栏视图可达性缺口；目标：禁用它后视图仍可用）。
+完整计划与分步判定标准见 `../dsh-shinki-sidebar-tools/README.md` 的「路线图」小节。
