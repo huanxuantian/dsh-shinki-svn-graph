@@ -74,47 +74,52 @@ test('client bundle 通过 __ModuleLoader__.load 注册且 id = 包名', async (
 
 test('exports.inject 是 cordis 服务名，不是 npm 包名', async () => {
   const { exports } = await loadClient();
-  assert.deepEqual([...exports.inject].sort(), ['betterSidebar', 'locale']);
+  assert.deepEqual([...exports.inject].sort(), ['locale']);   // 入口只走适配层，不再依赖第三方
   for (const s of exports.inject) assert.ok(!s.startsWith('@'), `${s} 看起来是 npm 包名`);
 });
 
-test('apply() 注册侧边栏 Tab，描述符形状符合 betterSidebar 契约', async () => {
+test('apply() 经视图中间件注册，描述符形状符合适配层契约', async () => {
   const { exports, registry } = await loadClient();
   const disposers = [];
+  let betterCalls = 0;
   const ctx = {
     locale: { register: () => () => {} },
-    betterSidebar: { registerTab: (desc) => { registry.tabs.push(desc); return () => {}; } },
+    get: (n) => {
+      if (n === 'shinkiViews') return { register: (sp) => { registry.tabs.push(sp); return () => {}; } };
+      if (n === 'betterSidebar') return { registerTab: () => { betterCalls += 1; return () => {}; } };
+      return undefined;
+    },
     effect: (fn) => { disposers.push(fn); },
   };
   exports.apply(ctx);
   assert.equal(registry.tabs.length, 1);
-  const tab = registry.tabs[0];
-  assert.equal(tab.id, 'dsh-shinki-svn-graph');
-  assert.equal(typeof tab.title, 'function');
-  assert.equal(typeof tab.title(), 'string');
-  assert.equal(tab.single, true);
-  assert.equal(typeof tab.order, 'number');
-  assert.equal(typeof tab.icon, 'function');
-  assert.equal(typeof tab.component, 'function');
-  assert.ok(tab.settings?.pluginToggles?.length > 0, '应有声明式设置项');
+  const spec = registry.tabs[0];
+  assert.equal(spec.id, 'dsh-shinki-svn-graph');
+  assert.equal(typeof spec.title, 'string');
+  assert.ok(spec.title.length > 0);
+  assert.equal(spec.order, 26);
+  assert.deepEqual([...spec.targets].sort(), ['bottom', 'right']);
+  assert.equal(spec.background, 'pause');
+  assert.equal(typeof spec.render, 'function');
+  assert.ok(spec.settings?.pluginToggles?.length > 0, '应有声明式设置项');
+  assert.equal(betterCalls, 0, '老模式兜底已移除：现场即便有 better-sidebar 也不得直连');
   // 样式已注入且带 data-dsh-plugin 标记（HMR 复查靠它复用同一个 <style>）
   assert.equal(registry.styles.length, 1);
   assert.equal(registry.styles[0].dataset.dshPlugin, 'dsh-shinki-svn-graph');
   assert.match(registry.styles[0].textContent, /\.ssg-root/);
 });
 
-test('缺少 betterSidebar 服务时只告警、不抛错（降级）', async () => {
+test('不依赖第三方：没有视图中间件时也只是降级、不抛错、不再提 betterSidebar', async () => {
   const { exports } = await loadClient();
   const warnings = [];
   const original = console.warn;
   console.warn = (...a) => warnings.push(a.join(' '));
   try {
-    exports.apply({ locale: { register: () => () => {} }, effect: () => {} });
+    assert.doesNotThrow(() => exports.apply({ locale: { register: () => () => {} }, effect: () => {} }));
   } finally {
     console.warn = original;
   }
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /betterSidebar/);
+  assert.ok(!warnings.some((w) => /betterSidebar/.test(w)), '不应再有 betterSidebar 告警：' + warnings.join(' | '));
 });
 
 test('面板组件可渲染（loading 初始态）', async () => {
