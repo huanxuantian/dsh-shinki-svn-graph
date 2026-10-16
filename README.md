@@ -109,6 +109,28 @@ dsh-shinki-svn-graph/
 > ⚠️ 生效副本是 profile 里 pnpm 安装的那份（`file:` 是**快照**）。改源码后必须重跑
 > 第 2 步刷新快照，或直接改用 `link:`。host 半边（`lib/*.js`）改动**必须重启** dsh web。
 
+### 官方 DSH 桌面端的 profile 名（实测）
+
+上面的示例用了自定义 profile 名。若目标是**官方 DSH 桌面端**，它启动的是固定名字
+`desktop`（`@deepseek-ai/dsh-desktop-host/lib/index.js` 的 `main()` 里
+`runProfile({ profile: "desktop", args: ["--no-open", "--port", "19387"] })`），
+目录是 `%USERPROFILE%\.dsh\profiles\desktop`：
+
+```powershell
+& 'E:\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd' plugin --profile desktop add `
+  file:E:\path\to\dsh-shinki-svn-graph
+```
+
+**不要用 agent shell 里的 `DSH_HOME` / `DSH_PROFILE_DIR` 判断目标 profile**：机器上若还留着旧的
+可移植（EAC）实例，它指向的是另外的 profile（本机是 `web-desktop`），装到那里官方客户端完全看不到。
+
+两点与上面不同的实测结论：
+
+- **生效是热挂载**：官方客户端在 `dsh plugin add` 完成后即把新 bundle 挂进运行中的会话
+  （实测 BLE/串口插件的 agent 工具当场出现），因此**不一定要重启**；没生效时再重启客户端。
+- **验证**：`dsh plugin --profile desktop list --depth 0` 应列出本插件；设置 → 插件页
+  （`pluginInventory`，宿主 Loader 的实时投影）应能搜到 `dsh-shinki-svn-graph`。
+
 ---
 
 ## 环境要求
