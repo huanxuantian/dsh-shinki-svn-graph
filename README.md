@@ -34,7 +34,8 @@ DSH Web GUI 的**侧边栏 SVN 插件**：探测当前工作区（及其一级�
    - 用户名走 `--username`（不是秘密）；
    - **密码走 stdin**（`--password-from-stdin`，SVN 1.14+），**绝不进入命令行**，
      `ps` 里看不到明文；
-   - 默认允许 svn 写它的凭据缓存（等价于"记住"）；勾选「不保存凭据」才加 `--no-auth-cache`。
+   - **默认不保存**：交互输入的这次调用带 `--no-auth-cache`；勾选「保存凭据（交给 svn 凭据缓存）」
+     才让 svn 写缓存（第一级系统凭据探测始终允许读缓存，不受此开关影响）。
 
 所有命令一律附加 `--non-interactive`：svn 需要凭据时会尝试读 `/dev/tty`，宿主进程
 若恰有控制终端，那既会**阻塞本次调用**、又会把提示画到别人的终端上。加上该选项后
@@ -61,7 +62,8 @@ HTTPS 自签名/过期证书可用「信任服务器证书」开关放行
 
 - 会话工作目录由 host **权威解析**（活动会话 → 持久化会话头 → 工作区台账），客户端
   传来的 `cwd` 只作为提示，且必须命中台账；`repoPath` 必须是工作区内的相对路径。
-- 仅接受回环连接，或 `--trusted-host` 白名单中的 Host（`lib/trust-fence.js`）。
+- 仅接受回环连接，或 `--trusted-host` 白名单中的 Host（`lib/trust-fence.js`；DSH 0.2.1 起从
+  `ctx.web.trustedHosts` 读取，取不到时退化为仅回环可访问）。
 
 ---
 
@@ -136,10 +138,11 @@ dsh-shinki-svn-graph/
 ## 环境要求
 
 - 本机有 `svn` 可执行文件。查找顺序：`DSH_SVN_BIN` 环境变量 → `PATH` → 常见安装路径
-  （`/opt/homebrew/bin/svn`、`/usr/local/bin/svn`、`/usr/bin/svn` …）。找不到时面板显示
+  （macOS/Linux：`/opt/homebrew/bin/svn`、`/usr/local/bin/svn`、`/opt/local/bin/svn`、
+  `/usr/bin/svn`；Windows：TortoiseSVN / SlikSvn 的 `bin\svn.exe`）。找不到时面板显示
   明确提示而不是空白。
-- SVN 1.14+ 以获得 `--password-from-stdin`（1.13 及更早会退化为在命令行传密码，
-  面板会因此不可用于认证——请升级 svn）。
+- SVN 1.14+：交互输入的口令一律经 `--password-from-stdin` 送入（代码里没有"退回命令行
+  传密码"的分支），低于 1.14 的 svn 不认识该选项，认证会直接失败——请升级 svn。
 - Node 20+（宿主进程）。
 
 ---
@@ -148,7 +151,7 @@ dsh-shinki-svn-graph/
 
 ```sh
 export PATH=/opt/homebrew/bin:$PATH
-node --test          # 49 项：XML 解析、路径校验、认证装配、错误归类、
+node --test          # 53 项：XML 解析、路径校验、认证装配、错误归类、
                      #          路由边界，以及一个真实本地 file:// 仓库的端到端用例
 ```
 
@@ -162,6 +165,7 @@ node --test          # 49 项：XML 解析、路径校验、认证装配、错�
   `svn add/commit` 直接报 `E155010 找不到节点`。
   `lib/svn-runner.js` 的 `utf8LocaleOverride()` 给子进程补 `LC_CTYPE=*.UTF-8`，
   并把 `LC_ALL` 置空以解除它对 LC_CTYPE 的压制 —— 只改字符集，**不改消息语言**。
+  Windows 走 UTF-16 argv，不存在该问题，这一覆盖在 win32 上直接跳过。
 - `svn log <工作副本>` 默认按该路径的 `BASE:1` 取，而工作副本**根目录节点**的版本
   常常是 0（提交子文件不会抬高它）→ 日志会是空的。必须显式 `-r HEAD:1`。
 - `svn status` 在非工作副本目录里**退出码是 0**，只在 stderr 打 `W155007` 警告并返回
@@ -179,8 +183,12 @@ git 有暂存区所以没有这个问题，svn 没有。
 
 ### 版本号
 
+当前 **v0.1.9**（`package.json` 的 `version` 与 tag `v0.1.9` 一致）；分支沿用 git-graph 的
+策略：`main` / `dsh0.2.0` / `dsh0.2.1`，当前开发分支是 `dsh0.2.1`。
+
 `lib/client.js` 里的 `PLUGIN_VERSION` 是 `package.json` 的**硬编码副本**（浏览器半边读不到
-package.json），改版本时两处都要改。
+package.json），改版本时两处都要改。**当前两处不同步**：`package.json` 是 0.1.9，
+`PLUGIN_VERSION` 仍是 0.1.6（面板角标显示的是后者）。
 
 ---
 
@@ -190,7 +198,7 @@ Apache-2.0
 
 ## 相关路线图（依赖提示）
 
-本插件与第三方 `dsh-better-sidebar` 有**服务依赖**（激活时 `inject` 该服务，缺失会 `pending`）。
-社区计划由 **`dsh-shinki-sidebar-tools`** 逐步**接替 `dsh-better-sidebar` 的部分能力**
-（背景：第三方版本兼容风险 + 官方右侧边栏视图可达性缺口；目标：禁用它后视图仍可用）。
+视图不再依赖第三方 `dsh-better-sidebar`（老模式兜底已于 2026-10-09 移除），改为向
+**`dsh-shinki-sidebar-tools`** 的 `shinkiViews` 服务注册（`targets: ['bottom', 'right']`，
+离开视图即暂停 `background: 'pause'`）；该服务缺失时只是不注册，不阻塞插件激活。
 完整计划与分步判定标准见 `../dsh-shinki-sidebar-tools/README.md` 的「路线图」小节。
